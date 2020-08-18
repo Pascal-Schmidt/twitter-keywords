@@ -1,0 +1,12 @@
+name: keywords
+title: keywords
+username:
+account: pascalschmidt
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2620671
+bundleId: 3498715
+url: https://pascalschmidt.shinyapps.io/keywords/
+when: 1597090717.0036
+asMultiple: FALSE
+asStatic: FALSE
