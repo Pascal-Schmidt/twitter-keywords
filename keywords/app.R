@@ -27,7 +27,6 @@ source("shiny_helpers/bigram.R")
 source("shiny_helpers/network_graph.R")
 source("shiny_helpers/common_words.R")
 
-source("toggle_module.R")
 
 Sys.setenv(R_CONFIG_ACTIVE = "default")
 config <- config::get(file = "credentials.yml")
@@ -85,6 +84,10 @@ ui <- shiny::bootstrapPage(
                         max     = 2000,
                         value   = 5),
                     shiny::textInput(inputId = "location", label = "Location", placeholder = "World"),
+                    shiny::selectInput(inputId  = "select_lang",
+                                       label    = "Select Language",
+                                       selected = "All",
+                                       choices  = c("All", sort(twitter_languages$lang_long[-1]))),
                     div(
                         shiny::checkboxGroupInput(inputId = "filters", label = "Apply Filters",
                                                   choices = c("verified", "news", "media"),
@@ -325,6 +328,10 @@ server <- function(input, output, session) {
             
         }
     
+        rv$tweet_language <- base::ifelse(input$select_lang == "All", 
+                                          NULL,
+                                          twitter_languages$value[which(input$select_lang == twitter_languages$lang_long)])
+        
         # 2.3 Pull in Tweets ----
         rv$twitter_data <- rtweet::search_tweets(
                 q           = paste0(c(input$query, rv$filters), collapse = ", ") %>%
@@ -332,7 +339,8 @@ server <- function(input, output, session) {
                 n           = input$n_tweets,
                 include_rts = FALSE, 
                 geocode     = rv$location,
-                token       = token
+                token       = token,
+                lang        = rv$tweet_language
             )   
         
         
