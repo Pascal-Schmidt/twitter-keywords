@@ -16,6 +16,8 @@ library(sf)
 library(networkD3)
 library(here)
 library(DT)
+library(shinycssloaders)
+
 
 # stop words
 stop_words_pck <- rtweet::stopwordslangs %>% 
@@ -123,7 +125,9 @@ ui <- shiny::bootstrapPage(
                         div(
                             class     = "col-sm-6 panel",
                             div(class = "panel-heading", h5("Word Counts")),
-                            div(class = "panel-body", plotly::plotlyOutput(outputId = "plotly", height = "400px"))
+                            div(class = "panel-body", plotly::plotlyOutput(outputId = "plotly", height = "400px") %>%
+                                    shinycssloaders::withSpinner() %>%
+                                    div(id = "hide_spinner"))
                         ),
                         div(
                             class     = "col-sm-6 panel",
@@ -248,6 +252,9 @@ ui <- shiny::bootstrapPage(
 # 2.0 Server ----
 server <- function(input, output, session) {
     
+    output$plotly <- renderPlotly({
+    })
+    
     # show word cloud slider if requested
     shiny::observeEvent(input$toggle, {
         
@@ -313,107 +320,94 @@ server <- function(input, output, session) {
         
         withProgress(message = 'Downloading Twitter Data',
                      detail = 'This may take a while...', value = 0, {
-        
-        # 2.2 Specify Location ----
-        rv$location <- rtweet::lookup_coords(address = input$location,
-                                             apikey  = key)
-        
-        if(length(input$filters) > 0) {
-            
-            rv$filters <- paste0("filter:", input$filters, collapse = " ")
-            
-        } else {
-            
-            rv$filters <- ""
-            
-        }
-    
-        rv$tweet_language <- base::ifelse(input$select_lang == "All", 
-                                          NULL,
-                                          twitter_languages$value[which(input$select_lang == twitter_languages$lang_long)])
-        
-        # 2.3 Pull in Tweets ----
-        rv$twitter_data <- rtweet::search_tweets(
-                q           = paste0(c(input$query, rv$filters), collapse = ", ") %>%
-                    stringr::str_squish(),
-                n           = input$n_tweets,
-                include_rts = FALSE, 
-                geocode     = rv$location,
-                token       = token,
-                lang        = rv$tweet_language
-            )   
-        
-        
+                         
+                         # 2.2 Specify Location ----
+                         rv$location <- rtweet::lookup_coords(address = input$location,
+                                                              apikey  = key)
+                         
+                         if(length(input$filters) > 0) {
+                             
+                             rv$filters <- paste0("filter:", input$filters, collapse = " ")
+                             
+                         } else {
+                             
+                             rv$filters <- ""
+                             
+                         }
+                         
+                         rv$tweet_language <- base::ifelse(input$select_lang == "All", 
+                                                           "",
+                                                           twitter_languages$value[which(twitter_languages$lang_long %in% input$select_lang)])
+                         
+                         print(rv$tweet_language)
+                         
+                         # 2.3 Pull in Tweets ----
+                         rv$twitter_data <- rtweet::search_tweets(
+                             q           = paste0(c(input$query, rv$filters), collapse = ", ") %>%
+                                 stringr::str_squish(),
+                             n           = input$n_tweets,
+                             include_rts = FALSE, 
+                             geocode     = rv$location,
+                             token       = token,
+                             lang        = rv$tweet_language
+                         )   
+                         
+                         
                      })
         
         withProgress(message = 'Creating Plots + Map',
                      detail = 'This may take a while...', value = 0, {
-        
-        if(nrow(rv$twitter_data) > 0) {
-            
-            # 2.5 Cleaning Twitter Text ----
-            rv$twitter_text <- clean_text(rv$twitter_data)
-            rv$common_words <- rv$twitter_text %>%
-                common_words(df = ., query = input$query, stop_words_pck = stop_words_pck)
-            
-            # 2.7 Common Words Plot ----
-            output$plotly <- renderPlotly({
-                
-                plot <- ggplot(rv$common_words %>%
-                                   head(input$more_words), aes(x = word, y = n)) +
-                    geom_col() +
-                    coord_flip()
-                
-                ggplotly(plot)
-                
-            })
-            
-            
-            
-            # 2.8 Leaflet Map -----
-            output$map <- renderLeaflet({
-
-                req(rv$location)
-
-                map_data <- rv$location$point %>%
-                    dplyr::bind_rows() %>%
-                    dplyr::bind_cols(dplyr::tibble(location = rv$location$place))
-
-                map_border <- list.files("all_maps")[which(stringr::str_detect(paste0(stringr::str_to_lower(input$location), ".rds"), list.files("all_maps")))]
-                if(length(map_border) == 1) {
-
-                    rv$map_border <- base::readRDS(paste0("all_maps/", map_border))
-
-                    map_data %>%
-                        leaflet() %>%
-                        setView(map_data$lng, map_data$lat, zoom = 4) %>%
-                        addTiles() %>%
-                        addMarkers(~lng, ~lat, popup = ~as.character(location), label = ~as.character(location)) %>%
-                        addPolygons(data = rv$map_border,
-                                    weight = 0.5)
-
-                } else {
-
-                    map_data %>%
-                        leaflet() %>%
-                        setView(map_data$lng, map_data$lat, zoom = 4) %>%
-                        addTiles() %>%
-                        addMarkers(~lng, ~lat, popup = ~as.character(location), label = ~as.character(location))
-
-                }
-            })
-    
-            } else {
-                
-                shiny::modalDialog(
-                title = "No Search Results",
-                easyClose = TRUE,
-                div(
-                    tags$p("Your Twitter query could not retrieve any data.")
-                )
-            ) %>% shiny::showModal()
-            
-            }
+                         
+                         if(nrow(rv$twitter_data) > 0) {
+                             
+                             # 2.5 Cleaning Twitter Text ----
+                             rv$twitter_text <- clean_text(rv$twitter_data)
+                             rv$common_words <- rv$twitter_text %>%
+                                 common_words(df = ., query = input$query, stop_words_pck = stop_words_pck)
+                             
+                             # 2.7 Common Words Plot ----
+                             output$plotly <- renderPlotly({
+                                 
+                                 plot <- ggplot(rv$common_words %>%
+                                                    head(input$more_words), aes(x = word, y = n)) +
+                                     geom_col() +
+                                     coord_flip()
+                                 
+                                 ggplotly(plot)
+                                 
+                             })
+                             
+                             
+                             
+                             # 2.8 Leaflet Map -----
+                             output$map <- renderLeaflet({
+                                 
+                                 req(rv$location)
+                                 
+                                 map_data <- rv$location$point %>%
+                                     dplyr::bind_rows() %>%
+                                     dplyr::bind_cols(dplyr::tibble(location = rv$location$place))
+                                 
+                                 
+                                 map_data %>%
+                                     leaflet() %>%
+                                     setView(map_data$lng, map_data$lat, zoom = 4) %>%
+                                     addTiles() %>%
+                                     addMarkers(~lng, ~lat, popup = ~as.character(location), label = ~as.character(location))
+                                 
+                             })
+                             
+                         } else {
+                             
+                             shiny::modalDialog(
+                                 title = "No Search Results",
+                                 easyClose = TRUE,
+                                 div(
+                                     tags$p("Your Twitter query could not retrieve any data.")
+                                 )
+                             ) %>% shiny::showModal()
+                             
+                         }
                          
                      })
         
@@ -421,59 +415,59 @@ server <- function(input, output, session) {
     
     # 2.9 Wordcloud Plot ----
     shiny::observe({
-
+        
         shiny::req(nrow(rv$common_words) > 0)
         
         withProgress(message = 'Creating Word Clouds',
                      detail = 'This may take a while...', value = 0, {
                          
-        if(input$radio_wordcloud == "Words") {
-            
-            rv$df_wordcloud <- rv$common_words
-            
-        } else if(input$radio_wordcloud == "Hashtags") {
-            
-            rv$df_wordcloud <- rv$twitter_data$hashtags %>%
-                unlist() %>%
-                na.omit() %>%
-                dplyr::tibble(word = .) %>%
-                dplyr::count(word, sort = TRUE)
-            
-        } else {
-            
-            rv$df_wordcloud <- rv$twitter_data$mentions_screen_name %>%
-                unlist() %>%
-                na.omit() %>%
-                dplyr::tibble(word = .) %>%
-                dplyr::count(word, sort = TRUE)
-            
-        }
-        
-        
-        # if less than 100 rows for bigram data, decrease slider range
-        rv$max_slider_input_wc <- min(100, nrow(rv$df_wordcloud))
-        
-        
-        # update slider based on requested data set
-        shiny::updateSliderInput(session, 
-                                 inputId = "wordcloud_slider",
-                                 min     = 1,
-                                 max     = rv$max_slider_input_wc,
-                                 value   = rv$max_slider_input_wc*0.25)
-        
-        output$wordcloud <- shiny::renderPlot({
-            
-            ggplot(rv$df_wordcloud[1:max(1, input$wordcloud_slider), ], aes(label = word, size = n, col = as.character(n))) +
-                geom_text_wordcloud(rm_outside = TRUE, max_steps = 1,
-                                    grid_size = 1, eccentricity = .9) +
-                scale_size_area(max_size = 14) +
-                #scale_color_brewer(palette = "paired", direction = -1) +
-                theme_void()
-
-        })
-        
+                         if(input$radio_wordcloud == "Words") {
+                             
+                             rv$df_wordcloud <- rv$common_words
+                             
+                         } else if(input$radio_wordcloud == "Hashtags") {
+                             
+                             rv$df_wordcloud <- rv$twitter_data$hashtags %>%
+                                 unlist() %>%
+                                 na.omit() %>%
+                                 dplyr::tibble(word = .) %>%
+                                 dplyr::count(word, sort = TRUE)
+                             
+                         } else {
+                             
+                             rv$df_wordcloud <- rv$twitter_data$mentions_screen_name %>%
+                                 unlist() %>%
+                                 na.omit() %>%
+                                 dplyr::tibble(word = .) %>%
+                                 dplyr::count(word, sort = TRUE)
+                             
+                         }
+                         
+                         
+                         # if less than 100 rows for bigram data, decrease slider range
+                         rv$max_slider_input_wc <- min(100, nrow(rv$df_wordcloud))
+                         
+                         
+                         # update slider based on requested data set
+                         shiny::updateSliderInput(session, 
+                                                  inputId = "wordcloud_slider",
+                                                  min     = 1,
+                                                  max     = rv$max_slider_input_wc,
+                                                  value   = rv$max_slider_input_wc*0.25)
+                         
+                         output$wordcloud <- shiny::renderPlot({
+                             
+                             ggplot(rv$df_wordcloud[1:max(1, input$wordcloud_slider), ], aes(label = word, size = n, col = as.character(n))) +
+                                 geom_text_wordcloud(rm_outside = TRUE, max_steps = 1,
+                                                     grid_size = 1, eccentricity = .9) +
+                                 scale_size_area(max_size = 14) +
+                                 #scale_color_brewer(palette = "paired", direction = -1) +
+                                 theme_void()
+                             
+                         })
+                         
                      })
-
+        
     })
     
     # 2.10 Language Distribution Graph ----
@@ -496,40 +490,40 @@ server <- function(input, output, session) {
         
         withProgress(message = 'Network Graph',
                      detail = 'This may take a while...', value = 0, {
-        
-        # only renders when requested twitter data is available and
-        # the submit button is clicked on first page or
-        # the submit button is clicked on second page
-        shiny::req(nrow(rv$common_words) > 0)
-        
-        
-        # data cleaning for bigram
-        rv$bigram_data <- rv$twitter_text %>%
-            bigram(df = ., stop_words_pck = stop_words_pck) %>%
-            dplyr::rename(weight = n)
-        
-        # if less than 500 rows for bigram data, decrease slider range
-        rv$max_slider_input <- min(500, nrow(rv$bigram_data))
-        
-        # update slider based on requested data set
-        shiny::updateSliderInput(session, 
-                                 inputId = "slider_network",
-                                 min     = 1,
-                                 max     = rv$max_slider_input,
-                                 value   = rv$max_slider_input*0.25)
-        
-        
-        output$graph <- networkD3::renderForceNetwork({
-            
-            rv$bigram_data %>%
-                .[1:max(1, input$slider_network), ] %>%
-                igraph::graph_from_data_frame() %>%
-                    
-                # my own defined function in shiny_helpers
-                network_graph()
-            
-        })  
-        
+                         
+                         # only renders when requested twitter data is available and
+                         # the submit button is clicked on first page or
+                         # the submit button is clicked on second page
+                         shiny::req(nrow(rv$common_words) > 0)
+                         
+                         
+                         # data cleaning for bigram
+                         rv$bigram_data <- rv$twitter_text %>%
+                             bigram(df = ., stop_words_pck = stop_words_pck) %>%
+                             dplyr::rename(weight = n)
+                         
+                         # if less than 500 rows for bigram data, decrease slider range
+                         rv$max_slider_input <- min(500, nrow(rv$bigram_data))
+                         
+                         # update slider based on requested data set
+                         shiny::updateSliderInput(session, 
+                                                  inputId = "slider_network",
+                                                  min     = 1,
+                                                  max     = rv$max_slider_input,
+                                                  value   = rv$max_slider_input*0.25)
+                         
+                         
+                         output$graph <- networkD3::renderForceNetwork({
+                             
+                             rv$bigram_data %>%
+                                 .[1:max(1, input$slider_network), ] %>%
+                                 igraph::graph_from_data_frame() %>%
+                                 
+                                 # my own defined function in shiny_helpers
+                                 network_graph()
+                             
+                         })  
+                         
                      })
         
     })
@@ -537,13 +531,18 @@ server <- function(input, output, session) {
     # Twitter data table
     output$table <- DT::renderDataTable({
         
-        req(nrow(rv$twitter_data) > 0)
         
-        rv$twitter_data %>%
-            dplyr::mutate(Link = paste0("<a href='",
-                                        "https://twitter.com/", screen_name, "/status/", status_id,
-                                        "' target='_blank'>", "Tweet","</a>")) %>%
-            dplyr::select(Text = text, Link) 
+        withProgress(message = 'Creating Table',
+                     detail = 'This may take a while...', value = 0, {
+                         req(nrow(rv$twitter_data) > 0)
+                         
+                         rv$twitter_data %>%
+                             dplyr::mutate(Link = paste0("<a href='",
+                                                         "https://twitter.com/", screen_name, "/status/", status_id,
+                                                         "' target='_blank'>", "Tweet","</a>")) %>%
+                             dplyr::select(Text = text, Link) 
+                         
+                     })
         
     }, escape = FALSE)
     
