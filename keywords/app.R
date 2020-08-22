@@ -17,6 +17,7 @@ library(networkD3)
 library(here)
 library(DT)
 library(shinycssloaders)
+library(RMeCab)
 
 
 # stop words
@@ -44,14 +45,16 @@ token <- rtweet::create_token(
 
 # location <- rtweet::lookup_coords(address = "United States",
 #                                      apikey  = key)
-#     
+# 
 # twitter_data <- rtweet::search_tweets(
 #     q           = paste0(c("bomb scare", ""), collapse = " "),
 #     n           = 200,
-#     include_rts = FALSE, 
+#     include_rts = FALSE,
 #     geocode     = location,
 #     token       = token
-# ) 
+# )
+# 
+# View(twitter_data)
 # 
 # bigram_cleaning(twitter_data, stop_words_pck = stop_words_pck) %>% View()
 
@@ -121,19 +124,8 @@ ui <- shiny::bootstrapPage(
                 # Show a plot of the generated distribution
                 shiny::mainPanel(
                     div(
-                        class = "row",
-                        div(
-                            class     = "col-sm-6 panel",
-                            div(class = "panel-heading", h5("Word Counts")),
-                            div(class = "panel-body", plotly::plotlyOutput(outputId = "plotly", height = "400px") %>%
-                                    shinycssloaders::withSpinner() %>%
-                                    div(id = "hide_spinner"))
-                        ),
-                        div(
-                            class     = "col-sm-6 panel",
-                            div(class = "panel-heading", h5("Language Distribution")),
-                            div(class = "panel-body", plotly::plotlyOutput(outputId = "language", height = "400px"))
-                        )
+                        class = "row",   
+                        shiny::uiOutput("wordcounts_large"),
                     ),
                     div(
                         class = "row",
@@ -225,6 +217,9 @@ ui <- shiny::bootstrapPage(
 
                                 # Word cloud Action Button Toggle UI ----
                                 div(class = "pull-right",
+                                    shiny::downloadButton(outputId = "wordclouds",
+                                                          label    = NULL,
+                                                          class    = "btn-default"),
                                     shiny::actionButton(
                                         inputId = "toggle_wordcloud",
                                         label   = NULL,
@@ -242,6 +237,13 @@ ui <- shiny::bootstrapPage(
             title = "Twitter Data",
             shiny::fluidRow(
                 shiny::column(12,
+                              div(class = "pull-right",
+                                  shiny::downloadButton(outputId = "twitter_data",
+                                                        label    = NULL,
+                                                        class    = "btn-default")
+                              ),
+                              br(),
+                              br(),
                               DT::dataTableOutput("table", width = "100%")
                 )
             )
@@ -251,6 +253,70 @@ ui <- shiny::bootstrapPage(
 
 # 2.0 Server ----
 server <- function(input, output, session) {
+    
+    output$wordcounts_large <- shiny::renderUI({
+        
+        if(sum(input$submit) == 0 | length(unique(rv$twitter_data$lang)) > 1) {
+            
+            shiny::tagList(
+                div(
+                    class     = "col-sm-6 panel",
+                    div(class = "panel-heading clearfix", 
+                        div(
+                            shiny::tags$h5(class = "pull-left",
+                                           "Word Counts"),
+                            div(class = "pull-right",
+                                shiny::downloadButton(outputId = "words_down",
+                                                      label    = NULL,
+                                                      class    = "btn-primary")
+                            )
+                        )
+                        
+                    ),
+                    div(class = "panel-body",
+                        plotly::plotlyOutput(outputId = "plotly", height = "400px") %>%
+                            shinycssloaders::withSpinner()
+                    )
+                    
+                    
+                    
+                ),
+                div(
+                    id        = "language_graph",
+                    class     = "col-sm-6 panel",
+                    div(class = "panel-heading", h5("Language Distribution")),
+                    div(class = "panel-body", plotly::plotlyOutput(outputId = "language", height = "400px"))
+                )
+            )
+            
+        } else {
+            
+            div(
+                class     = "col-sm-12 panel",
+                div(class = "panel-heading clearfix", 
+                    div(
+                        shiny::tags$h5(class = "pull-left",
+                                       "Word Counts"),
+                        div(class = "pull-right",
+                            shiny::downloadButton(outputId = "words_down",
+                                                  label    = NULL,
+                                                  class    = "btn-primary")
+                        )
+                    )
+                    
+                ),
+                div(class = "panel-body",
+                    plotly::plotlyOutput(outputId = "plotly", height = "400px") %>%
+                        shinycssloaders::withSpinner()
+                )
+                
+                
+                
+            )
+            
+        }
+        
+    })
     
     output$plotly <- renderPlotly({
     })
@@ -339,7 +405,6 @@ server <- function(input, output, session) {
                                                            "",
                                                            twitter_languages$value[which(twitter_languages$lang_long %in% input$select_lang)])
                          
-                         print(rv$tweet_language)
                          
                          # 2.3 Pull in Tweets ----
                          rv$twitter_data <- rtweet::search_tweets(
@@ -354,6 +419,16 @@ server <- function(input, output, session) {
                          
                          
                      })
+        
+        if(length(unique(rv$twitter_data$lang)) == 1) {
+            
+            shinyjs::hide(id = "language_graph", anim = TRUE)
+            
+        } else {
+            
+            shinyjs::show(id = "language_graph", anim = TRUE)
+            
+        }
         
         withProgress(message = 'Creating Plots + Map',
                      detail = 'This may take a while...', value = 0, {
@@ -457,12 +532,14 @@ server <- function(input, output, session) {
                          
                          output$wordcloud <- shiny::renderPlot({
                              
-                             ggplot(rv$df_wordcloud[1:max(1, input$wordcloud_slider), ], aes(label = word, size = n, col = as.character(n))) +
+                             rv$wordcloud_plot <- ggplot(rv$df_wordcloud[1:max(1, input$wordcloud_slider), ], aes(label = word, size = n, col = as.character(n))) +
                                  geom_text_wordcloud(rm_outside = TRUE, max_steps = 1,
                                                      grid_size = 1, eccentricity = .9) +
                                  scale_size_area(max_size = 14) +
                                  #scale_color_brewer(palette = "paired", direction = -1) +
                                  theme_void()
+                             
+                             rv$wordcloud_plot
                              
                          })
                          
@@ -540,11 +617,52 @@ server <- function(input, output, session) {
                              dplyr::mutate(Link = paste0("<a href='",
                                                          "https://twitter.com/", screen_name, "/status/", status_id,
                                                          "' target='_blank'>", "Tweet","</a>")) %>%
-                             dplyr::select(Text = text, Link) 
+                             dplyr::select(Text = text, Link)
                          
                      })
         
     }, escape = FALSE)
+    
+    # download common words ----
+    output$words_down <- shiny::downloadHandler(
+        
+        filename = function() {
+            paste0('common_words_', input$query, "_", rv$location, '.csv')
+        },
+        content = function(con) {
+            readr::write_csv(rv$common_words, con)
+        }
+        
+    )
+    
+    # download wordclouds ----
+    output$wordclouds <- shiny::downloadHandler(
+        
+        filename = function() {
+            paste0('wordcloud_', input$query, "_", rv$location, '.png')
+        },
+        content = function(con) {
+            ggsave(con, plot = rv$wordcloud_plot, device = "png")
+        }
+        
+    )
+    
+    # download data ----
+    output$twitter_data<- shiny::downloadHandler(
+        
+        filename = function() {
+            paste0('twitter_data_', input$query, "_", rv$location, '.csv')
+        },
+        content = function(con) {
+            rv$twitter_data %>%
+                dplyr::mutate(Link = paste0("<a href='",
+                                            "https://twitter.com/", screen_name, "/status/", status_id,
+                                            "' target='_blank'>", "Tweet","</a>")) %>%
+                dplyr::select(Text = text, Link) -> rv$twitter_down
+            readr::write_csv(rv$twitter_down, con)
+        }
+        
+    )
     
 }
 
