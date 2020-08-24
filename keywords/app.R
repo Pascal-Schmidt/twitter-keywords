@@ -14,10 +14,8 @@ library(igraph)
 library(ggraph)
 library(sf)
 library(networkD3)
-library(here)
 library(DT)
 library(shinycssloaders)
-library(RMeCab)
 
 
 # stop words
@@ -132,7 +130,9 @@ ui <- shiny::bootstrapPage(
                         div(
                             class = "col-sm-12 panel",
                             div(class = "panel-heading", h5("Map")),
-                            div(class = "panel-body", leaflet::leafletOutput(outputId = "map", height = 400))
+                            div(class = "panel-body", leaflet::leafletOutput(outputId = "map", height = 400) %>%
+                                    shinycssloaders::withSpinner()
+                                )
                         )
                     )
                     
@@ -285,7 +285,9 @@ server <- function(input, output, session) {
                     id        = "language_graph",
                     class     = "col-sm-6 panel",
                     div(class = "panel-heading", h5("Language Distribution")),
-                    div(class = "panel-body", plotly::plotlyOutput(outputId = "language", height = "400px"))
+                    div(class = "panel-body", plotly::plotlyOutput(outputId = "language", height = "400px") %>%
+                            shinycssloaders::withSpinner()
+                        )
                 )
             )
             
@@ -319,6 +321,10 @@ server <- function(input, output, session) {
     })
     
     output$plotly <- renderPlotly({
+    })
+    output$map <- renderPlotly({
+    })
+    output$language <- renderPlotly({
     })
     
     # show word cloud slider if requested
