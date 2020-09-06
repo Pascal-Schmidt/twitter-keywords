@@ -31,3 +31,12 @@
 .shiny-options-group {
   padding-left: 5px;
 }
+
+.fab.fa-twitter.fa-5x {
+  opacity: 0.45;
+  position: relative;
+}
+
+.panel-body  {
+    word-break:break-all
+}

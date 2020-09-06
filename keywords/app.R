@@ -1,3 +1,6 @@
+# 1.0 Set up ----
+
+# • load libraries ----
 library(shiny)
 library(rtweet)
 library(config)
@@ -12,23 +15,27 @@ library(forcats)
 library(RColorBrewer)
 library(igraph)
 library(ggraph)
-library(sf)
 library(networkD3)
 library(DT)
 library(shinycssloaders)
+library(jsonlite)
+library(rvest)
+library(shinyWidgets)
 
 
-# stop words
-stop_words_pck <- rtweet::stopwordslangs %>% 
+# • load stop words ----
+stop_words_pck <<- rtweet::stopwordslangs %>% 
     dplyr::filter(p >= 0.98)
 
-source("shiny_helpers/text_cleaning.R")
-source("shiny_helpers/language_distribution.R")
-source("shiny_helpers/bigram.R")
-source("shiny_helpers/network_graph.R")
-source("shiny_helpers/common_words.R")
+# • load shiny modules ----
+list.files("shiny_modules") %>%
+    purrr::map(~ source(paste0("shiny_modules/", .)))
 
+# • load shiny helper functions ----
+list.files("shiny_helpers") %>%
+    purrr::map(~ source(paste0("shiny_helpers/", .)))
 
+# • set up API credentials for Twitter and Google ----
 Sys.setenv(R_CONFIG_ACTIVE = "default")
 config <- config::get(file = "credentials.yml")
 key <- config$google_api_key
@@ -41,22 +48,53 @@ token <- rtweet::create_token(
     access_secret   = config$access_token_secret
 )
 
-# location <- rtweet::lookup_coords(address = "United States",
+# location <- rtweet::lookup_coords(address = "India",
 #                                      apikey  = key)
 # 
 # twitter_data <- rtweet::search_tweets(
-#     q           = paste0(c("bomb scare", ""), collapse = " "),
-#     n           = 200,
-#     include_rts = FALSE,
-#     geocode     = location,
-#     token       = token
-# )
+#      q           = "fire",
+#      n           = 1000,
+#      include_rts = FALSE,
+#      geocode     = location,
+#      token       = token
+#  )
+#  twitter_data %>%
+#      dplyr::mutate(date = lubridate::ymd(stringr::str_remove(as.character(twitter_data$created_at), " .*"))) %>%
+#      dplyr::count(date) -> plotly_plot
 # 
+#  plotly_plot[, "cat"] = sample(x = c("A", "B"), size = nrow(plotly_plot), replace = T)
+# 
+#  sample(c("A", "B"), nrow(plotly_plot), replace = TRUE)
+# 
+# 
+# plot_ly(plotly_plot, x = ~ date) %>%
+#     add_lines(y = ~fitted(loess(n ~ as.numeric(date))), color = ~ cat) %>%
+#     add_markers(y = ~n, color = ~ cat) %>%
+#     layout(showlegend = FALSE,
+#            xaxis = list(rangeslider = list(type = "date")))
+
+
+# 
+# twitter_data %>%
+#     dplyr::mutate(date = lubridate::floor_date(created_at, unit = "day")) %>%
+#     dplyr::count(date) %>%
+#     plot_ly(x = ~ date) %>%
+#     add_lines(y = ~n, color = I("#2196f3")) %>%
+#     add_markers(y = ~n, color = I("#2196f3")) %>%
+#     layout(showlegend = FALSE,
+#            xaxis = list(rangeslider = list(type = "date")))
+#     
 # View(twitter_data)
+# 
+# twitter_data %>%
+#     dplyr::pull(created_at) %>%
+#     range() %>%
+#     as.character() %>%
+#     stringr::str_remove(" .*")
 # 
 # bigram_cleaning(twitter_data, stop_words_pck = stop_words_pck) %>% View()
 
-# Define UI for application that draws a histogram
+# 2.0 Shiny UI ----
 ui <- shiny::bootstrapPage(
     
     shinyjs::useShinyjs(),
@@ -70,7 +108,7 @@ ui <- shiny::bootstrapPage(
         title       = "Keyword Anaysis",
         collapsible = TRUE,
         inverse     = TRUE, 
-        theme       = shinytheme("paper"),
+        theme       = shinythemes::shinytheme("paper"),
         
         
         shiny::tabPanel(
@@ -79,22 +117,34 @@ ui <- shiny::bootstrapPage(
             title = "Keyword Tracker",
             shiny::sidebarLayout(
                 shiny::sidebarPanel(
-                    shiny::textInput(inputId = "query", label = "Keyword", placeholder = "Your Keyword"),
+                    div(
+                        shiny::dateRangeInput(inputId = "old_tweets_date", 
+                                              label = tags$strong("Select Date Range"))  
+                    ),
+                    shiny::textInput(inputId = "query", 
+                                     label = tags$strong("Keyword"), 
+                                     placeholder = "Your Keyword"),
                     shiny::sliderInput(
                         inputId = "n_tweets",
-                        label   = "Number of tweets:",
+                        label   = tags$strong("Number of Tweets"),
                         min     = 1,
-                        max     = 2000,
-                        value   = 5),
-                    shiny::textInput(inputId = "location", label = "Location", placeholder = "World"),
+                        max     = 5000,
+                        value   = 500),
+                    shiny::textInput(inputId = "location", 
+                                     label = tags$strong("Location"), 
+                                     placeholder = "World"),
                     shiny::selectInput(inputId  = "select_lang",
-                                       label    = "Select Language",
+                                       label    = tags$strong("Select Language"),
                                        selected = "All",
                                        choices  = c("All", sort(twitter_languages$lang_long[-1]))),
                     div(
-                        shiny::checkboxGroupInput(inputId = "filters", label = "Apply Filters",
+                        shiny::checkboxGroupInput(inputId = "filters", label = tags$strong("Apply Filters"),
                                                   choices = c("verified", "news", "media"),
                                                   inline = TRUE)   
+                    ),
+                    div(
+                        shiny::checkboxInput(
+                            inputId = "old_tweets", label = "Get Old Tweets") 
                     ),
                     div(
                         shiny::actionButton(inputId = "submit", label = "Submit", class = "btn-primary"),
@@ -121,137 +171,45 @@ ui <- shiny::bootstrapPage(
                 
                 # Show a plot of the generated distribution
                 shiny::mainPanel(
+                    
+                    shiny::uiOutput("info_cards"),
+                    
                     div(
                         class = "row",   
                         shiny::uiOutput("wordcounts_large"),
                     ),
-                    div(
-                        class = "row",
-                        div(
-                            class = "col-sm-12 panel",
-                            div(class = "panel-heading", h5("Map")),
-                            div(class = "panel-body", leaflet::leafletOutput(outputId = "map", height = 400) %>%
-                                    shinycssloaders::withSpinner()
-                                )
-                        )
-                    )
+                    
+                    # • Map UI Module ----
+                    map_ui("map")
                     
                 )
             )
         ),
         
-        # Network Panel UI ----
+        # • Network Graph Tab + Module UI ----
         shiny::tabPanel(
             title = "Network Graph",
-            div(class = "outer",
-
-                # network graph output
-                networkD3::forceNetworkOutput(outputId = "graph", width = "100%", height = "100%"),
-                shiny::absolutePanel(
-                    style = "top:90px;left:10px;",
-                    fixed = TRUE,
-                    draggable = TRUE,
-                    div(
-                        id = "controls",
-                        class = "panel panel-default",
-                        div(
-                            class="panel-body",
-                            div(
-                                id = "hide_slider_network",
-                                # Network Slider UI ----
-                                shiny::sliderInput(inputId = "slider_network",
-                                                   label   = "Choose Network Size",
-                                                   min     = 1,
-                                                   max     = 500,
-                                                   value   = 75)
-                            ),
-                            div(
-
-                            # Network Action Button Toggle UI ----
-                            div(class = "pull-right",
-                                shiny::actionButton(
-                                    inputId = "toggle_network",
-                                    label   = NULL,
-                                    class   = "btn-default",
-                                    icon    = shiny::icon("cog")
-                                )
-                            )
-                            )
-                        )
-                    )
-                )
-
-            )
+            network_ui("network")
         ),
-
+    
+        # • Word Cloud Tab + Module UI ----
         shiny::tabPanel(
             title = "Wordclouds",
-            div(class = "outer",
-                shiny::plotOutput(outputId = "wordcloud", height = "100%", width = "100%"),
-                shiny::absolutePanel(
-                    style = "top:90px;left:10px;",
-                    fixed = TRUE,
-                    draggable = TRUE,
-                    div(
-                        id = "controls",
-                        class = "panel panel-default",
-                        div(
-                            class="panel-body",
-                            div(
-                                id = "hide_radio_wordcloud",
-                                # Word cloud Slider UI ----
-                                shiny::sliderInput(inputId = "wordcloud_slider",
-                                                   label   = "Choose Wordcloud Size",
-                                                   min     = 1,
-                                                   max     = 10,
-                                                   value   = 5),
-
-                                # Word cloud Radio Buttons UI ----
-                                shiny::radioButtons(inputId = "radio_wordcloud",
-                                                    label    = "Choose Wordcloud",
-                                                    selected = "Words",
-                                                    choices  = c("Words", "Hashtags", "Handles")
-                                )
-                            ),
-                            div(
-
-                                # Word cloud Action Button Toggle UI ----
-                                div(class = "pull-right",
-                                    shiny::downloadButton(outputId = "wordclouds",
-                                                          label    = NULL,
-                                                          class    = "btn-default"),
-                                    shiny::actionButton(
-                                        inputId = "toggle_wordcloud",
-                                        label   = NULL,
-                                        class   = "btn-default",
-                                        icon    = shiny::icon("cog")
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
+            wordcloud_ui("wordclouds")
         ),
+        
+        # • Table Tab + Module UI ----
         shiny::tabPanel(
             title = "Twitter Data",
             shiny::fluidRow(
-                shiny::column(12,
-                              div(class = "pull-right",
-                                  shiny::downloadButton(outputId = "twitter_data",
-                                                        label    = NULL,
-                                                        class    = "btn-default")
-                              ),
-                              br(),
-                              br(),
-                              DT::dataTableOutput("table", width = "100%")
-                )
+                table_ui("tweet_data")
             )
+            
         )
     )
 )
 
-# 2.0 Server ----
+# 3.0 Server ----
 server <- function(input, output, session) {
     
     output$wordcounts_large <- shiny::renderUI({
@@ -322,8 +280,8 @@ server <- function(input, output, session) {
     
     output$plotly <- renderPlotly({
     })
-    output$map <- renderPlotly({
-    })
+    # output$map <- renderPlotly({
+    # })
     output$language <- renderPlotly({
     })
     
@@ -332,22 +290,6 @@ server <- function(input, output, session) {
         
         shiny::req(nrow(rv$twitter_data) > 0)
         shinyjs::toggle(id = "common_words", anim = TRUE)
-        
-    })
-    
-    # hide network slider if requested
-    shiny::observeEvent(input$toggle_network, {
-        
-        shiny::req(nrow(rv$twitter_data) > 0)
-        shinyjs::toggle(id = "hide_slider_network", anim = TRUE)
-        
-    })
-    
-    # hide network slider if requested
-    shiny::observeEvent(input$toggle_wordcloud, {
-        
-        shiny::req(nrow(rv$twitter_data) > 0)
-        shinyjs::toggle(id = "hide_radio_wordcloud", anim = TRUE)
         
     })
     
@@ -384,7 +326,7 @@ server <- function(input, output, session) {
     })
     
     # 2.1 Setup Reactive Values ----
-    rv <- shiny::reactiveValues()
+    rv <<- shiny::reactiveValues()
     
     shiny::observeEvent(input$submit, {
         
@@ -425,6 +367,20 @@ server <- function(input, output, session) {
                          
                          
                      })
+    
+        
+        rv$tweets_archived <- get_old_tweets(input$old_tweets_date[1], input$old_tweets_date[2], rv$tweet_language, rv$location,
+                                             input$n_tweets, input$query, access_token = token) %>%
+            dplyr::mutate(data_source = "Archived")
+        
+        rv$counts_archived <- nrow(rv$tweets_archived)
+        rv$counts_api <- nrow(rv$twitter_data)
+        
+        rv$twitter_data %>%
+            dplyr::mutate(data_source = "API") %>%
+            dplyr::bind_rows(rv$tweets_archived) %>%
+            dplyr::distinct(text, .keep_all = TRUE) -> rv$twitter_data
+    
         
         if(length(unique(rv$twitter_data$lang)) == 1) {
             
@@ -451,30 +407,10 @@ server <- function(input, output, session) {
                                  
                                  plot <- ggplot(rv$common_words %>%
                                                     head(input$more_words), aes(x = word, y = n)) +
-                                     geom_col() +
+                                     geom_col(fill = "#2196f3") +
                                      coord_flip()
                                  
                                  ggplotly(plot)
-                                 
-                             })
-                             
-                             
-                             
-                             # 2.8 Leaflet Map -----
-                             output$map <- renderLeaflet({
-                                 
-                                 req(rv$location)
-                                 
-                                 map_data <- rv$location$point %>%
-                                     dplyr::bind_rows() %>%
-                                     dplyr::bind_cols(dplyr::tibble(location = rv$location$place))
-                                 
-                                 
-                                 map_data %>%
-                                     leaflet() %>%
-                                     setView(map_data$lng, map_data$lat, zoom = 4) %>%
-                                     addTiles() %>%
-                                     addMarkers(~lng, ~lat, popup = ~as.character(location), label = ~as.character(location))
                                  
                              })
                              
@@ -494,62 +430,117 @@ server <- function(input, output, session) {
         
     })
     
-    # 2.9 Wordcloud Plot ----
-    shiny::observe({
+    output$info_cards <- shiny::renderUI({
         
-        shiny::req(nrow(rv$common_words) > 0)
+        shiny::req(!is.null(nrow(rv$twitter_data)))
         
-        withProgress(message = 'Creating Word Clouds',
-                     detail = 'This may take a while...', value = 0, {
-                         
-                         if(input$radio_wordcloud == "Words") {
-                             
-                             rv$df_wordcloud <- rv$common_words
-                             
-                         } else if(input$radio_wordcloud == "Hashtags") {
-                             
-                             rv$df_wordcloud <- rv$twitter_data$hashtags %>%
-                                 unlist() %>%
-                                 na.omit() %>%
-                                 dplyr::tibble(word = .) %>%
-                                 dplyr::count(word, sort = TRUE)
-                             
-                         } else {
-                             
-                             rv$df_wordcloud <- rv$twitter_data$mentions_screen_name %>%
-                                 unlist() %>%
-                                 na.omit() %>%
-                                 dplyr::tibble(word = .) %>%
-                                 dplyr::count(word, sort = TRUE)
-                             
-                         }
-                         
-                         
-                         # if less than 100 rows for bigram data, decrease slider range
-                         rv$max_slider_input_wc <- min(100, nrow(rv$df_wordcloud))
-                         
-                         
-                         # update slider based on requested data set
-                         shiny::updateSliderInput(session, 
-                                                  inputId = "wordcloud_slider",
-                                                  min     = 1,
-                                                  max     = rv$max_slider_input_wc,
-                                                  value   = rv$max_slider_input_wc*0.25)
-                         
-                         output$wordcloud <- shiny::renderPlot({
-                             
-                             rv$wordcloud_plot <- ggplot(rv$df_wordcloud[1:max(1, input$wordcloud_slider), ], aes(label = word, size = n, col = as.character(n))) +
-                                 geom_text_wordcloud(rm_outside = TRUE, max_steps = 1,
-                                                     grid_size = 1, eccentricity = .9) +
-                                 scale_size_area(max_size = 14) +
-                                 #scale_color_brewer(palette = "paired", direction = -1) +
-                                 theme_void()
-                             
-                             rv$wordcloud_plot
-                             
-                         })
-                         
-                     })
+        rv$dates <- rv$twitter_data %>%
+            dplyr::pull(created_at) %>%
+            range() %>%
+            as.character() %>%
+            stringr::str_remove(" .*")
+        rv$most_tweets <- rv$twitter_data$screen_name %>%
+            table() %>%
+            sort() %>%
+            .[length(.)] %>% 
+            names()
+        
+        shiny::tagList(
+            shiny::fluidRow(
+                id = "show_info_cards",
+                column(
+                    width = 4,
+                    div(
+                        class = "panel panel-default",
+                        style = "background-color: #2196f3;",
+                        
+                        div(
+                            class = "panel-body",
+                            div(
+                                style = "color: white;",
+                                tags$h5(tags$small("Tweets Retrieved (API)", style = "color: white;"),
+                                        shiny::HTML("<br/>"),
+                                        tags$strong(rv$counts_api), 
+                                        shiny::HTML("<br/>"), 
+                                        tags$small("Tweets Retrieved (Archived)", style = "color: white;"),
+                                        shiny::HTML("<br/>"), 
+                                        tags$strong(rv$counts_archived),
+                                        style = "color: white;"),
+                                shiny::icon("twitter", class = "fa-5x") %>%
+                                    div(class = "pull-right")
+                            )
+                        )
+                    )
+                ),
+                column(
+                    width = 4,
+                    div(
+                        class = "panel panel-default",
+                        style = "background-color: #2196f3;",
+                        
+                        div(
+                            class = "panel-body",
+                            div(
+                                style = "color: white;",
+                                tags$h5(tags$small("Earliest Tweet on ", style = "color: white;"), 
+                                        shiny::HTML("<br/>"),
+                                        tags$strong(rv$dates[1], style = "color: white;"),
+                                        shiny::HTML("<br/>"),
+                                        tags$small("Latest Tweet on ", style = "color: white;"), 
+                                        shiny::HTML("<br/>"),
+                                        tags$strong(rv$dates[2], style = "color: white;")),
+                                shiny::icon("twitter", class = "fa-5x") %>%
+                                    div(class = "pull-right")
+                            )
+                        )
+                    )
+                ),
+                column(
+                    width = 4,
+                    div(
+                        class = "panel panel-default",
+                        style = "background-color: #2196f3;",
+                        
+                        div(
+                            class = "panel-body",
+                            div(
+                                style = "color: white;",
+                                tags$h5(tags$small("Most Tweets by ", style = "color: white;"), 
+                                        shiny::HTML("<br/>"),
+                                        tags$strong(rv$most_tweets, style = "color: white;")),
+                                shiny::icon("twitter", class = "fa-5x") %>%
+                                    div(class = "pull-right")
+                            )
+                        ) 
+                    ) 
+                )
+            ),
+            div(
+                class = "row",
+                div(
+                    class = "col-sm-12 panel",
+                    div(class = "panel-heading", h5("Tweet Volume")),
+                    div(class = "panel-body", plotly::plotlyOutput(outputId = "tweet_volume", height = 400) %>%
+                            shinycssloaders::withSpinner()
+                    )
+                )
+            )
+        )
+        
+        
+    })
+    
+
+    output$tweet_volume <- plotly::renderPlotly({
+        
+        rv$twitter_data %>%
+            dplyr::mutate(date = lubridate::floor_date(created_at, unit = "day")) %>%
+            dplyr::count(date, data_source) %>%
+            plot_ly(x = ~ date) %>%
+            add_lines(y = ~fitted(loess(n ~ as.numeric(date))), color = ~ data_source) %>%
+            add_markers(y = ~n, color = ~ data_source) %>%
+            layout(showlegend = FALSE,
+                   xaxis = list(rangeslider = list(type = "date")))
         
     })
     
@@ -567,67 +558,27 @@ server <- function(input, output, session) {
         
     })
     
+    # • Map ----
+    map_server("map", reactive(rv$location))
     
-    # Plot Network D3 Graph ----
-    shiny::observe({
-        
-        withProgress(message = 'Network Graph',
-                     detail = 'This may take a while...', value = 0, {
-                         
-                         # only renders when requested twitter data is available and
-                         # the submit button is clicked on first page or
-                         # the submit button is clicked on second page
-                         shiny::req(nrow(rv$common_words) > 0)
-                         
-                         
-                         # data cleaning for bigram
-                         rv$bigram_data <- rv$twitter_text %>%
-                             bigram(df = ., stop_words_pck = stop_words_pck) %>%
-                             dplyr::rename(weight = n)
-                         
-                         # if less than 500 rows for bigram data, decrease slider range
-                         rv$max_slider_input <- min(500, nrow(rv$bigram_data))
-                         
-                         # update slider based on requested data set
-                         shiny::updateSliderInput(session, 
-                                                  inputId = "slider_network",
-                                                  min     = 1,
-                                                  max     = rv$max_slider_input,
-                                                  value   = rv$max_slider_input*0.25)
-                         
-                         
-                         output$graph <- networkD3::renderForceNetwork({
-                             
-                             rv$bigram_data %>%
-                                 .[1:max(1, input$slider_network), ] %>%
-                                 igraph::graph_from_data_frame() %>%
-                                 
-                                 # my own defined function in shiny_helpers
-                                 network_graph()
-                             
-                         })  
-                         
-                     })
-        
-    })
+    # • Network Graph + Module Server ----
+    network_server("network", 
+                   common_words = reactive(rv$common_words), 
+                   twitter_text = reactive(rv$twitter_text), 
+                   twitter_data = reactive(rv$twitter_data))
     
-    # Twitter data table
-    output$table <- DT::renderDataTable({
-        
-        
-        withProgress(message = 'Creating Table',
-                     detail = 'This may take a while...', value = 0, {
-                         req(nrow(rv$twitter_data) > 0)
-                         
-                         rv$twitter_data %>%
-                             dplyr::mutate(Link = paste0("<a href='",
-                                                         "https://twitter.com/", screen_name, "/status/", status_id,
-                                                         "' target='_blank'>", "Tweet","</a>")) %>%
-                             dplyr::select(Text = text, Link)
-                         
-                     })
-        
-    }, escape = FALSE)
+    # • Word Cloud Plot ----
+    wordcloud_server("wordclouds", 
+                     twitter_data = reactive(rv$twitter_data), 
+                     common_words = reactive(rv$common_words), 
+                     location = reactive(rv$location), 
+                     query = reactive(input$query))
+    
+    # • Tweet Table ----
+    table_server("tweet_data", 
+                 twitter_data = reactive(rv$twitter_data), 
+                 location = reactive(rv$location), 
+                 query = reactive(input$query))
     
     # download common words ----
     output$words_down <- shiny::downloadHandler(
@@ -637,35 +588,6 @@ server <- function(input, output, session) {
         },
         content = function(con) {
             readr::write_csv(rv$common_words, con)
-        }
-        
-    )
-    
-    # download wordclouds ----
-    output$wordclouds <- shiny::downloadHandler(
-        
-        filename = function() {
-            paste0('wordcloud_', input$query, "_", rv$location, '.png')
-        },
-        content = function(con) {
-            ggsave(con, plot = rv$wordcloud_plot, device = "png")
-        }
-        
-    )
-    
-    # download data ----
-    output$twitter_data<- shiny::downloadHandler(
-        
-        filename = function() {
-            paste0('twitter_data_', input$query, "_", rv$location, '.csv')
-        },
-        content = function(con) {
-            rv$twitter_data %>%
-                dplyr::mutate(Link = paste0("<a href='",
-                                            "https://twitter.com/", screen_name, "/status/", status_id,
-                                            "' target='_blank'>", "Tweet","</a>")) %>%
-                dplyr::select(Text = text, Link) -> rv$twitter_down
-            readr::write_csv(rv$twitter_down, con)
         }
         
     )
